@@ -1,0 +1,20 @@
+{
+  "calibration": {
+    "m_bounds": [0.1, 0.9],
+    "omega_bounds": [6.0, 13.0],
+    "tc_min_ahead": 1.0,
+    "tc_max_ahead": 252.0,
+    "boundary_tolerance": 0.02,
+    "min_oscillations": 2.5,
+    "max_relative_rmse": 0.15,
+    "require_damping": true
+  },
+  "confidence": {
+    "window_sizes": [120, 180, 250, 360, 500, 750, 1000, 1250],
+    "min_valid_windows": 3,
+    "high_confidence": 0.6,
+    "moderate_confidence": 0.35,
+    "watch_confidence": 0.15,
+    "max_tc_dispersion_days": 90.0
+  }
+}
