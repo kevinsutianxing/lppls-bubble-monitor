@@ -1,120 +1,129 @@
-# LPPLS Bubble Monitor for A-Share Tech Stocks
+# LPPLS Bubble Monitor for A-Share Technology Stocks
 
-A quantitative bubble-detection system based on the **Log-Periodic Power Law Singularity (LPPLS)** model, adapted from:
+A research-grade **Log-Periodic Power Law Singularity (LPPLS)** diagnostic system for detecting
+super-exponential price regimes. Version 0.3 replaces the original single-window, seven-parameter
+fit with a linearized multiscale implementation and explicit fit-validity gates.
 
-> Grobys, K. (2025). *Magnificent 7: unsustainable growth and systemic risk*. **Review of Quantitative Finance and Accounting**, 67:437–468. [DOI: 10.1007/s11156-025-01458-6](https://doi.org/10.1007/s11156-025-01458-6)
+## Why version 0.3
 
-The original paper applied LPPLS to the US "Magnificent 7" tech stocks. This project adapts the methodology to **A-share (Chinese mainland) large-cap technology stocks**.
+The original prototype could label a fit `HIGH` even when `tc`, `m`, `omega` or `C` sat directly on
+the optimizer boundary. A stable sequence of boundary solutions can produce a misleadingly small
+`tc` standard deviation. Version 0.3 therefore applies this order of operations:
 
----
+1. calibrate the model;
+2. reject invalid, boundary-saturated or economically inconsistent fits;
+3. test residual and log-periodic diagnostics;
+4. aggregate evidence over multiple lookback windows;
+5. assign a monitoring state only after the validity gate.
 
-## What is LPPLS?
+A rejected fit is **not** weak evidence. It is excluded from the confidence numerator.
 
-The LPPLS model captures **super-exponential (faster-than-exponential) growth** in asset prices — a hallmark of speculative bubbles driven by herding and positive feedback. The model predicts a **finite-time singularity** (`tc`), a point of extreme market fragility where a regime change (crash or correction) becomes increasingly probable.
+## Model and calibration
 
-### The Model
-
-```
-ln[p(t)] = A + B(tc - t)^β × [1 + C × cos(ω × ln(tc - t) + φ)]
-```
-
-| Parameter | Meaning | Constraint |
-|-----------|---------|------------|
-| `A` | Expected log-price near `tc` | `A > 0` |
-| `B` | Power-law growth amplitude | `B < 0` |
-| `β` | Power-law exponent (super-exponential) | `0 < β < 1` |
-| `C` | Oscillation amplitude | `\|C\| < 1` |
-| `ω` | Angular log-frequency | `ω > 0` |
-| `φ` | Phase | unrestricted |
-| `tc` | Critical time (finite-time singularity) | `tc > t_end` |
-
-### Validation Pipeline
-
-1. **NLLS Calibration** — Differential evolution (global) + L-BFGS-B (local) with strict parameter constraints
-2. **ADF Test** — Augmented Dickey-Fuller on residuals; stationarity at 1% level ⇒ statistically significant LPPLS signature
-3. **Iterative Robustness** — Re-calibrate with progressively shorter windows (cut 20 obs per iteration, 10 rounds) to check `tc` stability
-4. **Risk Classification** — Combines ADF significance, `tc` stability, and parameter validity into HIGH / MODERATE / WATCH / LOW
-
----
-
-## Project Structure
-
-```
-.
-├── lppls_monitor.py        # Core LPPLS module (model, calibration, ADF test, QFQ builder)
-├── lppls_monitor_v2.py     # Strict-constraint version (production)
-├── run_v2.py               # Parallel runner for A-share tech stocks
-├── generate_charts.py      # Visualization (LPPLS fit plots + risk dashboard)
-├── requirements.txt
-├── examples/
-│   ├── magnificent7_paper.pdf   # Source paper (Open Access)
-│   ├── bubble_risk_dashboard.png
-│   └── chart_*.png              # LPPLS fit charts for HIGH/MODERATE stocks
-└── results/
-    ├── bubble_monitor_summary_v2.csv
-    ├── bubble_monitor_detailed_v2.json
-    └── LPPLS_Bubble_Monitor_Report.md
+```text
+ln p(t) = A + B f(t) + C1 g(t) + C2 h(t)
+f(t) = (tc - t)^m
+g(t) = f(t) cos(omega ln(tc - t))
+h(t) = f(t) sin(omega ln(tc - t))
 ```
 
-## Quick Start
+Only `tc`, `m` and `omega` are searched nonlinearly. For every candidate, `A`, `B`, `C1` and `C2`
+are solved by linear least squares. This reduces the nonlinear search from seven dimensions to
+three and removes the phase parameter from the optimizer.
 
-### Prerequisites
+The default strict profile uses:
 
-- Python 3.10+
-- Access to [fmdata](https://github.com/) financial data service (or modify `fetch_stock_data()` to use your own data source)
-- `ssh` access to the data host (or adapt the data fetching)
+- `0.10 <= m <= 0.90`;
+- `6 <= omega <= 13`;
+- `1 <= tc - t_end <= 252` trading days;
+- `B < 0` and relative oscillation amplitude `|C| < 1`;
+- damping condition;
+- at least 2.5 log-periodic oscillations;
+- relative-RMSE threshold;
+- explicit rejection near any search boundary.
 
-### Install
+## Multiscale confidence indicator
+
+The monitor scans the latest 120, 180, 250, 360, 500, 750, 1000 and 1250 observations when
+available. Every attempted window remains in the denominator, including optimizer failures.
+
+```text
+positive bubble confidence
+= qualified windows with ADF p <= 5% and Lomb p <= 10% / all attempted windows
+```
+
+Outputs include positive-bubble confidence, valid-fit ratio, boundary-saturation ratio, attempted
+and valid window counts, a `tc` distribution, and per-window rejection reasons. `tc` is a fragility
+interval, **not a deterministic crash date**.
+
+## Project structure
+
+```text
+src/lppls_monitor/
+├── model.py          # linearized LPPLS model
+├── calibration.py    # 3D nonlinear search + linear least squares
+├── validation.py     # boundary, damping, oscillation and fit gates
+├── diagnostics.py    # residual ADF and Lomb diagnostic
+├── confidence.py     # multiscale confidence indicator
+├── data.py           # fmdata HTTP and CSV providers, data-quality checks
+├── pipeline.py       # stock-level pipeline and data provenance
+├── backtest.py       # point-in-time walk-forward evaluation
+├── systemic.py       # market-cap-weighted systemic exposure
+├── null_simulation.py# geometric-random-walk false-positive tests
+├── reporting.py      # JSON, CSV and Markdown artifacts
+└── schemas.py        # typed, JSON-safe output objects
+```
+
+## Installation
 
 ```bash
-pip install numpy scipy statsmodels pandas matplotlib
+python -m pip install -e ".[dev]"
+pytest
 ```
 
-### Run
+## Run with fmdata
 
 ```bash
-# Analyze 12 A-share tech stocks (parallel, ~15 min)
-python run_v2.py
-
-# Generate charts for HIGH/MODERATE risk stocks
-python generate_charts.py
+python run_v2.py --fmdata-url http://127.0.0.1:1934
 ```
 
-### Customize
+For offline runs, each ticker CSV must contain `trade_date`, `close`, and either an official
+`adj_factor` or `pct_chg`:
 
-Edit the `TECH_STOCKS` list in `run_v2.py` to add or replace stocks:
+```bash
+python run_v2.py --csv-dir ./data/snapshots/2026-07-23
+```
+
+Every run writes a manifest, summary CSV, detailed JSON and Markdown report under
+`artifacts/<UTC run_id>/`. The stock payload includes a SHA-256 hash of the normalized input frame.
+
+## Validation utilities
 
 ```python
-TECH_STOCKS = [
-    ("300750", "宁德时代", "新能源科技"),
-    ("002415", "海康威视", "安防/AI"),
-    # ... add your own
-]
+from lppls_monitor import (
+    aggregate_systemic_exposure,
+    simulate_null_false_positive_rate,
+    walk_forward_backtest,
+)
 ```
 
----
+The backtest evaluates future 20/60/120/250-day returns and maximum drawdowns using only information
+available at each historical evaluation date. Thresholds should be promoted to production only after
+false-positive, precision/recall and regime-stability analysis on point-in-time data.
 
-## Sample Results (2026-07-23)
+## Risk interpretation
 
-| Risk | Count | Stocks |
-|------|-------|--------|
-| 🔴 HIGH | 3 | 京东方A, 中兴通讯, 兆易创新 |
-| 🟠 MODERATE | 3 | 宁德时代, 立讯精密, 海康威视 |
-| 🟡 WATCH | 5 | 科大讯飞, 东方财富, 同花顺, 中芯国际, 爱尔眼科 |
-| 🟢 LOW | 1 | 四维图新 |
+- `HIGH`: sufficiently many valid windows, high confidence and a stable `tc` distribution.
+- `MODERATE`: meaningful multiscale evidence, but incomplete or less stable.
+- `WATCH`: a minority of windows pass all gates.
+- `LOW`: no robust positive-bubble signature.
+- invalid fits retain their explicit `fit_status`; they are never silently converted to `LOW`.
 
----
-
-## Important Disclaimers
-
-- **LPPLS is a diagnostic tool, not a trading signal.** The critical time `tc` represents a phase of extreme fragility, not a deterministic crash date (Grobys 2025, p. 332; Sornette 2017).
-- A-share markets have unique characteristics (±10%/20% price limits, policy interventions, T+1) that may affect model applicability.
-- This is a research/educational project, **not investment advice**.
-- The source paper is Open Access under CC BY 4.0.
+LPPLS is a diagnostic, not a trading signal. Combine it with valuation, earnings, liquidity,
+positioning, policy and market-structure evidence.
 
 ## References
 
-- Grobys, K. (2025). Magnificent 7: unsustainable growth and systemic risk. *Rev Quant Finan Acc* 67, 437–468.
-- Sornette, D. (2017). *Why Stock Markets Crash*. Princeton University Press.
-- Johansen, A. & Sornette, D. (2001). Finite-time singularity in the dynamics of the world population. *Physica A* 294, 465–502.
-- Lin, L., Ren, R. & Sornette, D. (2014). The volatility-confined LPPL model. *Int Rev Financial Anal* 33, 210–225.
+- Filimonov, V. & Sornette, D. (2013). A stable and robust calibration scheme of the LPPLS model.
+- Grobys, K. (2025). *Magnificent 7: unsustainable growth and systemic risk*.
+- Sornette, D. (2017). *Why Stock Markets Crash*.
