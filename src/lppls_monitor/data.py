@@ -14,7 +14,8 @@ REQUIRED_COLUMNS = {"trade_date", "close"}
 
 
 class PriceProvider(Protocol):
-    def fetch_daily(self, code: str) -> pd.DataFrame: ...
+    def fetch_daily(self, code: str) -> pd.DataFrame:
+        ...
 
 
 @dataclass
